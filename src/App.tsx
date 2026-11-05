@@ -1,20 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, Settings, Save, X, Volume2, Edit2, Check, LogIn, LogOut } from 'lucide-react';
+import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
 
 // ==========================================
-// 1. Firebaseの設定（※ご自身の情報に書き換えてください）
+// 1. Firebaseの設定
 // ==========================================
 const firebaseConfig = {
-  apiKey: "AIzaSyCsPAQ7HSnDGNjBE4pqdYhk4YJkVOS5wZU",
-  authDomain: "smartvocab-d09d2.firebaseapp.com",
-  projectId: "smartvocab-d09d2",
-  storageBucket: "smartvocab-d09d2.firebasestorage.app",
-  messagingSenderId: "892434677199",
-  appId: "1:892434677199:web:8ceee337eb86cd75e6a6ba",
-  measurementId: "G-2CSDYYGX6Q"
+  apiKey: "AIzaSyCsPAQ7HSnDGNjBE4pqdYhk4YJkVOS5wZU",
+  authDomain: "smartvocab-d09d2.firebaseapp.com",
+  projectId: "smartvocab-d09d2",
+  storageBucket: "smartvocab-d09d2.firebasestorage.app",
+  messagingSenderId: "892434677199",
+  appId: "1:892434677199:web:8ceee337eb86cd75e6a6ba",
+  measurementId: "G-2CSDYYGX6Q"
 };
 
 // Firebaseの初期化
@@ -30,8 +30,6 @@ export default function App() {
   const [words, setWords] = useState([]);
   const [newWord, setNewWord] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [apiKey, setApiKey] = useState("");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   
   // 編集モード用のステート
@@ -45,10 +43,6 @@ export default function App() {
   // 初期設定とデータ同期
   // ------------------------------------------
   useEffect(() => {
-    // Gemini APIキーの読み込み
-    const savedKey = localStorage.getItem('gemini_api_key');
-    if (savedKey) setApiKey(savedKey);
-
     // ログイン状態の監視
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -81,7 +75,7 @@ export default function App() {
   }, [user]);
 
   // ------------------------------------------
-  // 認証・設定機能
+  // 認証機能
   // ------------------------------------------
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -95,40 +89,31 @@ export default function App() {
 
   const handleLogout = () => signOut(auth);
 
-  const saveApiKey = () => {
-    localStorage.setItem('gemini_api_key', apiKey);
-    setShowSettings(false);
-  };
-
   // ------------------------------------------
-  // AI生成機能
+  // 無料翻訳API (APIキー不要)
   // ------------------------------------------
-  const generateAIContent = async (wordToTranslate) => {
-    if (!apiKey) {
-      return {
-        japanese: "（※APIキー未設定）" + wordToTranslate + "の意味",
-        exampleEnglish: `This is an example for ${wordToTranslate}.`,
-        exampleJapanese: `これは ${wordToTranslate} のデモ例文です。`
-      };
-    }
+  const generateTranslation = async (wordToTranslate) => {
     try {
-      const prompt = `あなたは優秀な英語教師です。以下の英単語の「自然な日本語訳」「日常英会話で使える短い例文」「その例文の自然な日本語訳」をJSON形式で出力してください。
-単語: "${wordToTranslate}"
-出力形式: {"japanese": "日本語訳", "exampleEnglish": "英文", "exampleJapanese": "例文の日本語訳"}`;
-
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { response_mime_type: "application/json" }
-        })
-      });
-      const data = await response.json();
-      if (data.candidates && data.candidates[0].content.parts[0].text) {
-        return JSON.parse(data.candidates[0].content.parts[0].text);
+      // MyMemory APIを使用して英語から日本語へ翻訳
+      const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(wordToTranslate)}&langpair=en|ja`;
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error("通信エラー");
       }
-      throw new Error("Invalid format");
+      
+      const data = await response.json();
+      const translatedText = data.responseData?.translatedText;
+
+      if (!translatedText) {
+        throw new Error("翻訳結果が空です");
+      }
+
+      return {
+        japanese: translatedText,
+        exampleEnglish: "", 
+        exampleJapanese: "（※簡易翻訳のため例文は手動で編集してください）"
+      };
     } catch (error) {
       console.error("API Error:", error);
       alert("翻訳に失敗しました。");
@@ -144,15 +129,15 @@ export default function App() {
     if (!newWord.trim() || isGenerating || !user) return;
 
     setIsGenerating(true);
-    const aiData = await generateAIContent(newWord.trim());
+    const translationData = await generateTranslation(newWord.trim());
     
-    if (aiData) {
+    if (translationData) {
       try {
         await addDoc(collection(db, 'users', user.uid, 'words'), {
           english: newWord.trim(),
-          japanese: aiData.japanese,
-          exampleEnglish: aiData.exampleEnglish,
-          exampleJapanese: aiData.exampleJapanese,
+          japanese: translationData.japanese,
+          exampleEnglish: translationData.exampleEnglish,
+          exampleJapanese: translationData.exampleJapanese,
           order: Date.now(),
           createdAt: serverTimestamp()
         });
@@ -235,7 +220,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-sm w-full">
           <h1 className="text-2xl font-bold text-slate-800 mb-2">My単語帳</h1>
-          <p className="text-slate-500 mb-8 text-sm">クラウド保存対応・AIアシスト搭載</p>
+          <p className="text-slate-500 mb-8 text-sm">クラウド保存対応・自動翻訳搭載</p>
           <button onClick={handleLogin} className="w-full bg-blue-600 text-white rounded-xl py-3 font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
             <LogIn size={20} />
             Googleでログイン
@@ -255,9 +240,6 @@ export default function App() {
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
           <h1 className="text-lg font-bold text-slate-800">My単語帳</h1>
           <div className="flex items-center gap-2">
-            <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full">
-              <Settings size={20} />
-            </button>
             <button onClick={handleLogout} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full">
               <LogOut size={20} />
             </button>
@@ -341,10 +323,12 @@ export default function App() {
                      </div>
                   ) : (
                     <>
-                      <div className="flex items-start gap-2">
-                        <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
-                        <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
-                      </div>
+                      {word.exampleEnglish && (
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
+                          <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
+                        </div>
+                      )}
                       <div className={`text-sm transition-all duration-300 ${word.isHidden ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: word.isHidden ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
                         {word.exampleJapanese}
                       </div>
@@ -377,21 +361,6 @@ export default function App() {
               </button>
             </form>
             <p className="text-xs text-slate-400 mt-3 text-center">追加後も入力欄は開いたままになります</p>
-          </div>
-        </div>
-      )}
-
-      {/* API Key Settings Modal */}
-      {showSettings && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl">
-            <h2 className="text-lg font-bold text-slate-800 mb-2">AI設定 (Gemini API)</h2>
-            <p className="text-sm text-slate-600 mb-4">Gemini APIキーを入力すると高精度な自動翻訳が有効になります。</p>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="AIzaSy..." className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <button onClick={saveApiKey} className="w-full bg-slate-800 text-white rounded-xl py-3 font-medium hover:bg-slate-700 flex items-center justify-center gap-2">
-              <Save size={18} />
-              保存して閉じる
-            </button>
           </div>
         </div>
       )}
