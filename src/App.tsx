@@ -31,6 +31,10 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   
+  // 【修正点】UIの状態管理をデータベースから切り離し、勝手なリセットを防止
+  const [revealedIds, setRevealedIds] = useState([]);
+  const [expandedIds, setExpandedIds] = useState([]);
+  
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
 
@@ -52,9 +56,7 @@ export default function App() {
       const unsubscribeDb = onSnapshot(q, (snapshot) => {
         const wordsData = snapshot.docs.map(doc => ({
           id: doc.id,
-          ...doc.data(),
-          isHidden: true,
-          isExampleOpen: false
+          ...doc.data()
         }));
         setWords(wordsData);
       });
@@ -76,12 +78,10 @@ export default function App() {
   const handleLogout = () => signOut(auth);
 
   // ------------------------------------------
-  // 完全無料・APIキー不要の翻訳＆例文取得ロジック
+  // 翻訳＆例文取得ロジック
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
     let exampleEn = "";
-
-    // 1. 無料の辞書APIから英語の例文を取得
     try {
       const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(wordToTranslate)}`);
       if (dictRes.ok) {
@@ -99,14 +99,13 @@ export default function App() {
         }
       }
     } catch (err) {
-      console.warn("Dictionary API Error:", err);
+      console.warn(err);
     }
 
     if (!exampleEn) {
       exampleEn = `This is a sentence using the word "${wordToTranslate}".`;
     }
 
-    // 2. 無料の翻訳APIで日本語に変換
     const translateText = async (text) => {
       try {
         const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`);
@@ -133,15 +132,21 @@ export default function App() {
   // ------------------------------------------
   const handleAddWord = async (e) => {
     e.preventDefault();
-    if (!newWord.trim() || isGenerating || !user) return;
+    const wordText = newWord.trim();
+    if (!wordText || isGenerating || !user) return;
 
     setIsGenerating(true);
 
     try {
-      const translationData = await getTranslationAndExample(newWord.trim());
+      const translationData = await getTranslationAndExample(wordText);
+      
+      // 【修正点】Firestoreの保存完了を待たずにUI（入力欄）を即座にリセット
+      // これによりクルクルが無限に回るのを防ぎ、連続登録が可能になります
+      setNewWord("");
+      setIsGenerating(false);
       
       await addDoc(collection(db, 'users', user.uid, 'words'), {
-        english: newWord.trim(),
+        english: wordText,
         japanese: translationData.japanese,
         exampleEnglish: translationData.exampleEnglish,
         exampleJapanese: translationData.exampleJapanese,
@@ -149,12 +154,8 @@ export default function App() {
         createdAt: serverTimestamp()
       });
       
-      setNewWord(""); 
     } catch (error) {
       console.error("Add Error:", error);
-      alert("登録中にエラーが発生しました。");
-    } finally {
-      // 成功でも失敗でも必ずクルクルを解除
       setIsGenerating(false);
     }
   };
@@ -188,10 +189,15 @@ export default function App() {
   };
 
   // ------------------------------------------
-  // UI補助・音声再生機能
+  // UI補助機能
   // ------------------------------------------
-  const toggleHidden = (id) => setWords(words.map(w => w.id === id ? { ...w, isHidden: !w.isHidden } : w));
-  const toggleExample = (id) => setWords(words.map(w => w.id === id ? { ...w, isExampleOpen: !w.isExampleOpen } : w));
+  const toggleHidden = (id) => {
+    setRevealedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleExample = (id) => {
+    setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
 
   const startEditing = (word) => {
     setEditingId(word.id);
@@ -199,10 +205,7 @@ export default function App() {
   };
 
   const handleSpeak = (text) => {
-    if (!('speechSynthesis' in window)) {
-      alert("お使いのブラウザは音声読み上げに対応していません。");
-      return;
-    }
+    if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     
     let rate = 1.0;
@@ -238,7 +241,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
-      {/* Header */}
       <header className="bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
           <h1 className="text-lg font-bold text-slate-800">My単語帳</h1>
@@ -255,86 +257,95 @@ export default function App() {
           </div>
         )}
 
-        {words.map((word, index) => (
-          <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative">
-            <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-              {/* 並び替えボタン */}
-              <div className="flex flex-col items-center justify-center gap-1 mt-1">
-                <button onClick={() => moveWord(index, 'up')} disabled={index === 0} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronUp size={20} /></button>
-                <button onClick={() => moveWord(index, 'down')} disabled={index === words.length - 1} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronDown size={20} /></button>
-              </div>
+        {words.map((word, index) => {
+          const isRevealed = revealedIds.includes(word.id);
+          const isExpanded = expandedIds.includes(word.id);
 
-              {/* メインコンテンツ */}
-              <div className="flex-1 min-w-0">
-                {editingId === word.id ? (
-                  <div className="space-y-2 mb-2 pr-8">
-                    <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-xl font-bold border-b border-blue-300 focus:outline-none" />
-                    <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b border-blue-300 focus:outline-none" rows={2} />
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex items-center gap-2 mb-1 pr-14">
-                      <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
-                      <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
-                    </div>
-                    <div className="relative mt-1 pr-8">
-                      <div className={`text-base transition-all duration-300 ${word.isHidden ? 'text-transparent select-none' : 'text-slate-600'}`} style={{ textShadow: word.isHidden ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                        {word.japanese}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
+          return (
+            <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative">
+              <div className="p-4 border-b border-slate-100 flex items-start gap-3">
+                {/* 並び替えボタン */}
+                <div className="flex flex-col items-center justify-center gap-1 mt-1">
+                  <button onClick={() => moveWord(index, 'up')} disabled={index === 0} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronUp size={20} /></button>
+                  <button onClick={() => moveWord(index, 'down')} disabled={index === words.length - 1} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronDown size={20} /></button>
+                </div>
 
-              {/* アクションボタン */}
-              <div className="absolute right-2 top-2 flex flex-col gap-1">
-                {editingId === word.id ? (
-                  <button onClick={() => saveEdit(word.id)} className="p-2 text-green-500 hover:bg-green-50 rounded-full"><Check size={18} /></button>
-                ) : (
-                  <>
-                    <button onClick={() => toggleHidden(word.id)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full">{word.isHidden ? <EyeOff size={18} /> : <Eye size={18} />}</button>
-                    <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
-                    <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* 例文アコーディオン */}
-            <div className="bg-slate-50/50">
-              <button onClick={() => toggleExample(word.id)} className="w-full px-4 py-3 flex items-center justify-between text-sm text-slate-600 font-medium hover:bg-slate-50">
-                <span>例文を確認する</span>
-                {word.isExampleOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </button>
-              
-              {word.isExampleOpen && (
-                <div className="px-4 pb-4 pt-1 space-y-3">
+                {/* メインコンテンツ */}
+                <div className="flex-1 min-w-0">
                   {editingId === word.id ? (
-                     <div className="space-y-3">
-                       <textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
-                       <textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
-                     </div>
+                    <div className="space-y-2 mb-2 pr-8">
+                      <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-xl font-bold border-b border-blue-300 focus:outline-none" />
+                      <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b border-blue-300 focus:outline-none" rows={2} />
+                    </div>
                   ) : (
                     <>
-                      {word.exampleEnglish && (
-                        <div className="flex items-start gap-2">
-                          <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
-                          <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
+                      {/* 英単語と音声アイコン */}
+                      <div className="flex items-center gap-2 mb-1 pr-20">
+                        <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
+                        <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
+                      </div>
+                      
+                      {/* 【修正点】表示トグル(目玉アイコン)を編集ボタンから遠ざけ、日本語訳のすぐ横に配置 */}
+                      <div className="flex items-start gap-2 mt-1 pr-8">
+                        <button onClick={() => toggleHidden(word.id)} className="text-slate-400 hover:text-slate-600 p-1 flex-shrink-0 mt-0.5 bg-slate-50 rounded-full">
+                          {!isRevealed ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                        <div className={`text-base transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-600'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
+                          {word.japanese}
                         </div>
-                      )}
-                      <div className={`text-sm transition-all duration-300 ${word.isHidden ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: word.isHidden ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                        {word.exampleJapanese}
                       </div>
                     </>
                   )}
                 </div>
-              )}
+
+                {/* アクションボタン（編集・削除） */}
+                <div className="absolute right-2 top-2 flex gap-1">
+                  {editingId === word.id ? (
+                    <button onClick={() => saveEdit(word.id)} className="p-2 text-green-500 hover:bg-green-50 rounded-full"><Check size={18} /></button>
+                  ) : (
+                    <>
+                      <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
+                      <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* 例文アコーディオン */}
+              <div className="bg-slate-50/50">
+                <button onClick={() => toggleExample(word.id)} className="w-full px-4 py-3 flex items-center justify-between text-sm text-slate-600 font-medium hover:bg-slate-50">
+                  <span>例文を確認する</span>
+                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                </button>
+                
+                {isExpanded && (
+                  <div className="px-4 pb-4 pt-1 space-y-3">
+                    {editingId === word.id ? (
+                       <div className="space-y-3">
+                         <textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
+                         <textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
+                       </div>
+                    ) : (
+                      <>
+                        {word.exampleEnglish && (
+                          <div className="flex items-start gap-2">
+                            <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
+                            <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
+                          </div>
+                        )}
+                        <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
+                          {word.exampleJapanese}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </main>
 
-      {/* FAB */}
       <button onClick={() => setIsAddModalOpen(true)} className="fixed right-6 bottom-6 w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-blue-700 hover:scale-105 transition-all z-20">
         <Plus size={28} />
       </button>
