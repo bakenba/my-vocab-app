@@ -76,7 +76,7 @@ export default function App() {
   const handleLogout = () => signOut(auth);
 
   // ------------------------------------------
-  // ★完全無料・APIキー不要の翻訳＆例文取得ロジック
+  // 完全無料・APIキー不要の翻訳＆例文取得ロジック
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
     let exampleEn = "";
@@ -102,12 +102,11 @@ export default function App() {
       console.warn("Dictionary API Error:", err);
     }
 
-    // 例文が見つからなかった場合のデフォルト文
     if (!exampleEn) {
       exampleEn = `This is a sentence using the word "${wordToTranslate}".`;
     }
 
-    // 2. 無料の翻訳API(MyMemory)で日本語に変換する関数
+    // 2. 無料の翻訳APIで日本語に変換
     const translateText = async (text) => {
       try {
         const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`);
@@ -119,7 +118,6 @@ export default function App() {
       }
     };
 
-    // 単語と例文をそれぞれ翻訳
     const translatedWord = await translateText(wordToTranslate);
     const translatedExample = await translateText(exampleEn);
 
@@ -137,7 +135,7 @@ export default function App() {
     e.preventDefault();
     if (!newWord.trim() || isGenerating || !user) return;
 
-    setIsGenerating(true); // クルクル開始
+    setIsGenerating(true);
 
     try {
       const translationData = await getTranslationAndExample(newWord.trim());
@@ -151,13 +149,12 @@ export default function App() {
         createdAt: serverTimestamp()
       });
       
-      // ★登録成功したら入力欄を空にする
       setNewWord(""); 
     } catch (error) {
       console.error("Add Error:", error);
       alert("登録中にエラーが発生しました。");
     } finally {
-      // ★成功しても失敗しても、必ずクルクルを解除して次の単語を打てるようにする
+      // 成功でも失敗でも必ずクルクルを解除
       setIsGenerating(false);
     }
   };
@@ -337,7 +334,7 @@ export default function App() {
         ))}
       </main>
 
-      {/* FAB (Floating Action Button) */}
+      {/* FAB */}
       <button onClick={() => setIsAddModalOpen(true)} className="fixed right-6 bottom-6 w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-blue-700 hover:scale-105 transition-all z-20">
         <Plus size={28} />
       </button>
