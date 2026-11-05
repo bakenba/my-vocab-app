@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut } from 'lucide-react';
+import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, LogIn, LogOut, GripVertical } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, writeBatch } from 'firebase/firestore';
 
 // ==========================================
 // 1. Firebaseの設定
@@ -31,12 +31,15 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   
-  // 【修正点】UIの状態管理をデータベースから切り離し、勝手なリセットを防止
   const [revealedIds, setRevealedIds] = useState([]);
   const [expandedIds, setExpandedIds] = useState([]);
   
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
+
+  // ドラッグ＆ドロップ用ステート
+  const [draggedItemIndex, setDraggedItemIndex] = useState(null);
+  const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
 
   const lastSpokenRef = useRef({ text: "", isSlow: false });
 
@@ -128,7 +131,7 @@ export default function App() {
   };
 
   // ------------------------------------------
-  // 単語の追加・削除・更新
+  // 単語の追加・削除・更新・並び替え
   // ------------------------------------------
   const handleAddWord = async (e) => {
     e.preventDefault();
@@ -140,8 +143,6 @@ export default function App() {
     try {
       const translationData = await getTranslationAndExample(wordText);
       
-      // 【修正点】Firestoreの保存完了を待たずにUI（入力欄）を即座にリセット
-      // これによりクルクルが無限に回るのを防ぎ、連続登録が可能になります
       setNewWord("");
       setIsGenerating(false);
       
@@ -166,6 +167,7 @@ export default function App() {
     }
   };
 
+  // 【修正】確実に保存できるように明確なボタンUIに変更
   const saveEdit = async (id) => {
     try {
       await updateDoc(doc(db, 'users', user.uid, 'words', id), {
@@ -177,15 +179,43 @@ export default function App() {
       setEditingId(null);
     } catch (error) {
       console.error("Update Error:", error);
+      alert("保存に失敗しました。");
     }
   };
 
-  const moveWord = async (index, direction) => {
-    if ((direction === 'up' && index === 0) || (direction === 'down' && index === words.length - 1)) return;
-    const currentWord = words[index];
-    const targetWord = words[direction === 'up' ? index - 1 : index + 1];
-    await updateDoc(doc(db, 'users', user.uid, 'words', currentWord.id), { order: targetWord.order });
-    await updateDoc(doc(db, 'users', user.uid, 'words', targetWord.id), { order: currentWord.order });
+  // 【追加】ドラッグ＆ドロップによる並び替え保存処理
+  const handleDragEnd = async () => {
+    if (draggedItemIndex === null || dragOverItemIndex === null || draggedItemIndex === dragOverItemIndex) {
+      setDraggedItemIndex(null);
+      setDragOverItemIndex(null);
+      return;
+    }
+
+    const newWords = [...words];
+    const draggedItem = newWords[draggedItemIndex];
+    newWords.splice(draggedItemIndex, 1);
+    newWords.splice(dragOverItemIndex, 0, draggedItem);
+
+    // チラつきを防ぐため一時的に画面を更新
+    setWords(newWords);
+
+    // データベースの並び順を一括で書き換える
+    const batch = writeBatch(db);
+    const now = Date.now();
+
+    newWords.forEach((word, index) => {
+      const wordRef = doc(db, 'users', user.uid, 'words', word.id);
+      batch.update(wordRef, { order: now - index * 1000 });
+    });
+
+    try {
+      await batch.commit();
+    } catch (error) {
+      console.error("並び替えエラー:", error);
+    }
+
+    setDraggedItemIndex(null);
+    setDragOverItemIndex(null);
   };
 
   // ------------------------------------------
@@ -200,6 +230,10 @@ export default function App() {
   };
 
   const startEditing = (word) => {
+    // 編集モードに入る時、例文欄も自動で開くようにする
+    if (!expandedIds.includes(word.id)) {
+      setExpandedIds(prev => [...prev, word.id]);
+    }
     setEditingId(word.id);
     setEditForm({ ...word });
   };
@@ -242,138 +276,4 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
       <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
-          <h1 className="text-lg font-bold text-slate-800">My単語帳</h1>
-          <button onClick={handleLogout} className="p-2 text-slate-500 hover:bg-slate-100 rounded-full">
-            <LogOut size={20} />
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-md mx-auto p-4 space-y-4">
-        {words.length === 0 && (
-          <div className="text-center py-10 text-slate-400">
-            単語が登録されていません。<br/>右下の「＋」から追加してください。
-          </div>
-        )}
-
-        {words.map((word, index) => {
-          const isRevealed = revealedIds.includes(word.id);
-          const isExpanded = expandedIds.includes(word.id);
-
-          return (
-            <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative">
-              <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-                {/* 並び替えボタン */}
-                <div className="flex flex-col items-center justify-center gap-1 mt-1">
-                  <button onClick={() => moveWord(index, 'up')} disabled={index === 0} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronUp size={20} /></button>
-                  <button onClick={() => moveWord(index, 'down')} disabled={index === words.length - 1} className="text-slate-300 hover:text-slate-600 disabled:opacity-30 p-1"><ChevronDown size={20} /></button>
-                </div>
-
-                {/* メインコンテンツ */}
-                <div className="flex-1 min-w-0">
-                  {editingId === word.id ? (
-                    <div className="space-y-2 mb-2 pr-8">
-                      <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-xl font-bold border-b border-blue-300 focus:outline-none" />
-                      <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b border-blue-300 focus:outline-none" rows={2} />
-                    </div>
-                  ) : (
-                    <>
-                      {/* 英単語と音声アイコン */}
-                      <div className="flex items-center gap-2 mb-1 pr-20">
-                        <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
-                        <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
-                      </div>
-                      
-                      {/* 【修正点】表示トグル(目玉アイコン)を編集ボタンから遠ざけ、日本語訳のすぐ横に配置 */}
-                      <div className="flex items-start gap-2 mt-1 pr-8">
-                        <button onClick={() => toggleHidden(word.id)} className="text-slate-400 hover:text-slate-600 p-1 flex-shrink-0 mt-0.5 bg-slate-50 rounded-full">
-                          {!isRevealed ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                        <div className={`text-base transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-600'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                          {word.japanese}
-                        </div>
-                      </div>
-                    </>
-                  )}
-                </div>
-
-                {/* アクションボタン（編集・削除） */}
-                <div className="absolute right-2 top-2 flex gap-1">
-                  {editingId === word.id ? (
-                    <button onClick={() => saveEdit(word.id)} className="p-2 text-green-500 hover:bg-green-50 rounded-full"><Check size={18} /></button>
-                  ) : (
-                    <>
-                      <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
-                      <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
-                    </>
-                  )}
-                </div>
-              </div>
-
-              {/* 例文アコーディオン */}
-              <div className="bg-slate-50/50">
-                <button onClick={() => toggleExample(word.id)} className="w-full px-4 py-3 flex items-center justify-between text-sm text-slate-600 font-medium hover:bg-slate-50">
-                  <span>例文を確認する</span>
-                  {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                </button>
-                
-                {isExpanded && (
-                  <div className="px-4 pb-4 pt-1 space-y-3">
-                    {editingId === word.id ? (
-                       <div className="space-y-3">
-                         <textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
-                         <textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border border-blue-300 rounded p-2 focus:outline-none" rows={2} />
-                       </div>
-                    ) : (
-                      <>
-                        {word.exampleEnglish && (
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
-                            <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
-                          </div>
-                        )}
-                        <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                          {word.exampleJapanese}
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </main>
-
-      <button onClick={() => setIsAddModalOpen(true)} className="fixed right-6 bottom-6 w-14 h-14 bg-blue-600 text-white rounded-full shadow-lg flex items-center justify-center hover:bg-blue-700 hover:scale-105 transition-all z-20">
-        <Plus size={28} />
-      </button>
-
-      {/* 単語追加モーダル */}
-      {isAddModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-end z-50">
-          <div className="bg-white w-full rounded-t-3xl p-6 shadow-xl relative animate-slide-up max-w-md mx-auto">
-            <button onClick={() => setIsAddModalOpen(false)} className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 p-2 bg-slate-100 rounded-full">
-              <X size={20} />
-            </button>
-            <h2 className="text-lg font-bold text-slate-800 mb-4">単語を連続追加</h2>
-            
-            <form onSubmit={handleAddWord} className="flex gap-2">
-              <input type="text" value={newWord} onChange={(e) => setNewWord(e.target.value)} placeholder="わからない英単語を入力..." className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500" disabled={isGenerating} autoFocus />
-              <button type="submit" disabled={isGenerating || !newWord.trim()} className="bg-blue-600 text-white rounded-xl px-4 py-3 font-medium hover:bg-blue-700 disabled:opacity-50">
-                {isGenerating ? <span className="block w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span> : <Plus size={20} />}
-              </button>
-            </form>
-            <p className="text-xs text-slate-400 mt-3 text-center">追加後も入力欄は開いたままになります</p>
-          </div>
-        </div>
-      )}
-
-      <style>{`
-        .animate-slide-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
-        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-      `}</style>
-    </div>
-  );
-}
+        <div className="max-w-md mx-auto px-4 h-
