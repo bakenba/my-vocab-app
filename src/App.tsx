@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut, GripVertical } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, writeBatch } from 'firebase/firestore';
+import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
 
 // ==========================================
 // 1. Firebaseの設定
@@ -37,7 +37,6 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
 
-  // ドラッグ＆ドロップ用ステート
   const [draggedItemIndex, setDraggedItemIndex] = useState(null);
   const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
 
@@ -55,13 +54,19 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
-      const q = query(collection(db, 'users', user.uid, 'words'), orderBy('order', 'desc'));
+      // データベースのエラーを回避するため、並び替え(orderBy)はプログラム側で行う設定に変更
+      const q = query(collection(db, 'users', user.uid, 'words'));
       const unsubscribeDb = onSnapshot(q, (snapshot) => {
         const wordsData = snapshot.docs.map(doc => ({
           id: doc.id,
           ...doc.data()
         }));
+        
+        // orderの値で降順に並び替え
+        wordsData.sort((a, b) => (b.order || 0) - (a.order || 0));
         setWords(wordsData);
+      }, (error) => {
+        console.error("Firestore Error:", error);
       });
       return () => unsubscribeDb();
     } else {
@@ -157,6 +162,7 @@ export default function App() {
       
     } catch (error) {
       console.error("Add Error:", error);
+      alert("追加に失敗しました。Firebaseのルール設定を確認してください。");
       setIsGenerating(false);
     }
   };
@@ -175,10 +181,11 @@ export default function App() {
         exampleEnglish: editForm.exampleEnglish,
         exampleJapanese: editForm.exampleJapanese,
       });
+      // 成功したら確実に編集画面を閉じる
       setEditingId(null);
     } catch (error) {
       console.error("Update Error:", error);
-      alert("保存に失敗しました。");
+      alert("保存に失敗しました。Firebaseのルール設定を確認してください。");
     }
   };
 
@@ -226,9 +233,6 @@ export default function App() {
   };
 
   const startEditing = (word) => {
-    if (!expandedIds.includes(word.id)) {
-      setExpandedIds(prev => [...prev, word.id]);
-    }
     setEditingId(word.id);
     setEditForm({ ...word });
   };
@@ -291,6 +295,39 @@ export default function App() {
           const isExpanded = expandedIds.includes(word.id);
           const isDraggingThis = draggedItemIndex === index;
 
+          // ====== 編集モードのUI ======
+          if (editingId === word.id) {
+            return (
+              <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-4">
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">英単語</label>
+                    <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-lg font-bold border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-3 py-2 rounded-t-lg" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">日本語訳</label>
+                    <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">例文 (英語)</label>
+                    <textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">例文 (日本語訳)</label>
+                    <textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} />
+                  </div>
+                </div>
+                
+                {/* 保存・キャンセルボタン（カード最下部） */}
+                <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
+                  <button onClick={() => setEditingId(null)} className="px-5 py-2.5 text-sm text-slate-600 bg-slate-100 rounded-xl font-medium hover:bg-slate-200">キャンセル</button>
+                  <button onClick={() => saveEdit(word.id)} className="px-5 py-2.5 text-sm text-white bg-blue-600 rounded-xl font-medium hover:bg-blue-700 flex items-center gap-1"><Check size={18}/>保存する</button>
+                </div>
+              </div>
+            );
+          }
+
+          // ====== 通常モードのUI ======
           return (
             <div 
               key={word.id} 
@@ -305,60 +342,32 @@ export default function App() {
               onDragEnd={handleDragEnd}
             >
               <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-                {/* ドラッグハンドル */}
-                {editingId !== word.id && (
-                  <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500">
-                    <GripVertical size={20} />
-                  </div>
-                )}
-
-                {/* メインコンテンツ */}
-                <div className="flex-1 min-w-0">
-                  {editingId === word.id ? (
-                    <div className="space-y-3 pr-2 py-1">
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-400">英単語</label>
-                        <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-lg font-bold border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-2 py-1 rounded" />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-xs font-bold text-slate-400">日本語訳</label>
-                        <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 focus:outline-none bg-slate-50 px-2 py-1 rounded" rows={2} />
-                      </div>
-                      
-                      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 mt-2">
-                        <button onClick={() => setEditingId(null)} className="px-4 py-2 text-sm text-slate-600 bg-slate-100 rounded-lg font-medium hover:bg-slate-200">キャンセル</button>
-                        <button onClick={() => saveEdit(word.id)} className="px-4 py-2 text-sm text-white bg-blue-600 rounded-lg font-medium hover:bg-blue-700 flex items-center gap-1"><Check size={16}/>保存する</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2 mb-1 pr-20">
-                        <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
-                        <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
-                      </div>
-                      
-                      <div className="flex items-start gap-2 mt-1 pr-8">
-                        <button onClick={() => toggleHidden(word.id)} className="text-slate-400 hover:text-slate-600 p-1 flex-shrink-0 mt-0.5 bg-slate-50 rounded-full">
-                          {!isRevealed ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                        <div className={`text-base transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-600'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                          {word.japanese}
-                        </div>
-                      </div>
-                    </>
-                  )}
+                <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500">
+                  <GripVertical size={20} />
                 </div>
 
-                {/* アクションボタン */}
-                {editingId !== word.id && (
-                  <div className="absolute right-2 top-2 flex gap-1">
-                    <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
-                    <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1 pr-20">
+                    <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
+                    <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
                   </div>
-                )}
+                  
+                  <div className="flex items-start gap-2 mt-1 pr-8">
+                    <button onClick={() => toggleHidden(word.id)} className="text-slate-400 hover:text-slate-600 p-1 flex-shrink-0 mt-0.5 bg-slate-50 rounded-full">
+                      {!isRevealed ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                    <div className={`text-base transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-600'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
+                      {word.japanese}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="absolute right-2 top-2 flex gap-1">
+                  <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
+                  <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
+                </div>
               </div>
 
-              {/* 例文アコーディオン */}
               <div className="bg-slate-50/50">
                 <button onClick={() => toggleExample(word.id)} className="w-full px-4 py-3 flex items-center justify-between text-sm text-slate-600 font-medium hover:bg-slate-50">
                   <span>例文を確認する</span>
@@ -367,30 +376,15 @@ export default function App() {
                 
                 {isExpanded && (
                   <div className="px-4 pb-4 pt-1 space-y-3">
-                    {editingId === word.id ? (
-                       <div className="space-y-3">
-                         <div className="space-y-1">
-                           <label className="text-xs font-bold text-slate-400">例文 (英語)</label>
-                           <textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 rounded p-2 focus:outline-none bg-white" rows={2} />
-                         </div>
-                         <div className="space-y-1">
-                           <label className="text-xs font-bold text-slate-400">例文 (日本語訳)</label>
-                           <textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 rounded p-2 focus:outline-none bg-white" rows={2} />
-                         </div>
-                       </div>
-                    ) : (
-                      <>
-                        {word.exampleEnglish && (
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
-                            <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
-                          </div>
-                        )}
-                        <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
-                          {word.exampleJapanese}
-                        </div>
-                      </>
+                    {word.exampleEnglish && (
+                      <div className="flex items-start gap-2">
+                        <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
+                        <button onClick={() => handleSpeak(word.exampleEnglish)} className="text-blue-500 p-1.5 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0 mt-0.5"><Volume2 size={14} /></button>
+                      </div>
                     )}
+                    <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>
+                      {word.exampleJapanese}
+                    </div>
                   </div>
                 )}
               </div>
@@ -403,7 +397,6 @@ export default function App() {
         <Plus size={28} />
       </button>
 
-      {/* 単語追加モーダル */}
       {isAddModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-end z-50">
           <div className="bg-white w-full rounded-t-3xl p-6 shadow-xl relative animate-slide-up max-w-md mx-auto">
