@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, LogIn, LogOut, GripVertical } from 'lucide-react';
+// 【修正】Checkアイコンの読み込みを追加しました
+import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut, GripVertical } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy, writeBatch } from 'firebase/firestore';
@@ -167,7 +168,6 @@ export default function App() {
     }
   };
 
-  // 【修正】確実に保存できるように明確なボタンUIに変更
   const saveEdit = async (id) => {
     try {
       await updateDoc(doc(db, 'users', user.uid, 'words', id), {
@@ -183,7 +183,7 @@ export default function App() {
     }
   };
 
-  // 【追加】ドラッグ＆ドロップによる並び替え保存処理
+  // ドラッグ＆ドロップによる並び替え保存処理
   const handleDragEnd = async () => {
     if (draggedItemIndex === null || dragOverItemIndex === null || draggedItemIndex === dragOverItemIndex) {
       setDraggedItemIndex(null);
@@ -196,10 +196,8 @@ export default function App() {
     newWords.splice(draggedItemIndex, 1);
     newWords.splice(dragOverItemIndex, 0, draggedItem);
 
-    // チラつきを防ぐため一時的に画面を更新
     setWords(newWords);
 
-    // データベースの並び順を一括で書き換える
     const batch = writeBatch(db);
     const now = Date.now();
 
@@ -230,7 +228,6 @@ export default function App() {
   };
 
   const startEditing = (word) => {
-    // 編集モードに入る時、例文欄も自動で開くようにする
     if (!expandedIds.includes(word.id)) {
       setExpandedIds(prev => [...prev, word.id]);
     }
@@ -262,18 +259,4 @@ export default function App() {
   if (!user) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-2xl shadow-sm text-center max-w-sm w-full">
-          <h1 className="text-2xl font-bold text-slate-800 mb-2">My単語帳</h1>
-          <p className="text-slate-500 mb-8 text-sm">クラウド保存・自動翻訳搭載</p>
-          <button onClick={handleLogin} className="w-full bg-blue-600 text-white rounded-xl py-3 font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
-            <LogIn size={20} /> Googleでログイン
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
-      <header className="bg-white shadow-sm sticky top-0 z-10">
-        <div className="max-w-md mx-auto px-4 h-
+        <div className="bg-white p-8 rounded-2xl shadow-sm text-
