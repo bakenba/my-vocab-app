@@ -30,7 +30,7 @@ export default function App() {
   const [draggedItemIndex, setDraggedItemIndex] = useState(null);
   const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
   const [touchPos, setTouchPos] = useState(null);
-  const [regeneratingIds, setRegeneratingIds] = useState([]); // 新設：例文再生成中の単語IDを管理
+  const [regeneratingIds, setRegeneratingIds] = useState([]);
 
   const lastSpokenRef = useRef({ text: "", isSlow: false, unlocked: false });
   const scrollIntervalRef = useRef(null);
@@ -115,10 +115,9 @@ export default function App() {
     }
   };
 
-  // ★新機能：例文のみを再生成する処理
   const handleRegenerateExample = async (word) => {
     if (!user) return;
-    setRegeneratingIds(prev => [...prev, word.id]); // くるくるローディング開始
+    setRegeneratingIds(prev => [...prev, word.id]); 
 
     const prompt = `あなたは優秀な英語教師です。以下の英単語の「新しい実用的な例文」を作成してください。
 対象: "${word.english}" (意味: ${word.japanese})
@@ -147,7 +146,7 @@ export default function App() {
     } catch (error) {
       alert("例文の再生成に失敗しました。");
     } finally {
-      setRegeneratingIds(prev => prev.filter(id => id !== word.id)); // ローディング終了
+      setRegeneratingIds(prev => prev.filter(id => id !== word.id)); 
     }
   };
 
@@ -160,7 +159,6 @@ export default function App() {
       await updateDoc(doc(db, 'users', user.uid, 'words', id), {
         english: editForm.english, 
         japanese: editForm.japanese
-        // 例文はここで保存しない（上書きしない）
       });
       setEditingId(null);
     } catch (error) { alert("保存失敗"); }
@@ -193,7 +191,6 @@ export default function App() {
   const toggleHidden = (id) => setRevealedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleExample = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   
-  // 編集開始時、英単語と日本語訳だけをフォームにセットする
   const startEditing = (word) => { 
     setEditingId(word.id); 
     setEditForm({ english: word.english, japanese: word.japanese }); 
@@ -282,7 +279,6 @@ export default function App() {
                     <label className="text-xs font-bold text-slate-400">日本語訳</label>
                     <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg focus:outline-none" rows={2} />
                   </div>
-                  {/* 例文の編集エリアを削除してスッキリさせました */}
                 </div>
                 <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
                   <button onClick={() => setEditingId(null)} className="px-5 py-2.5 text-sm text-slate-600 bg-slate-100 rounded-xl font-medium hover:bg-slate-200">キャンセル</button>
@@ -355,7 +351,6 @@ export default function App() {
                   {isExpanded && (
                     <div className="px-4 pb-4 pt-1 space-y-3 text-left relative">
                       
-                      {/* 生成中の視覚的フィードバック */}
                       {isRegenerating && (
                         <div className="absolute inset-0 bg-slate-50/50 backdrop-blur-[1px] flex items-center justify-center z-10 rounded-b-2xl">
                           <RefreshCw size={24} className="text-blue-500 animate-spin" />
@@ -370,8 +365,16 @@ export default function App() {
                       )}
                       <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>{word.exampleJapanese}</div>
                       
-                      {/* ★新設：別の例文を生成するボタン */}
-                      <div className="pt-2 flex justify-end">
+                      {/* ★変更箇所：表示トグルと再生成ボタンを左右に配置したツールバー */}
+                      <div className="pt-3 mt-1 flex items-center justify-between border-t border-slate-200/60">
+                        <button 
+                          onClick={() => toggleHidden(word.id)}
+                          className="flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          {!isRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                          {!isRevealed ? '訳を表示' : '訳を隠す'}
+                        </button>
+
                         <button 
                           onClick={() => handleRegenerateExample(word)}
                           disabled={isRegenerating}
