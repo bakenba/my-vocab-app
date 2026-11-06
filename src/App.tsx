@@ -54,7 +54,6 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
-      // データベースのエラーを回避するため、並び替え(orderBy)はプログラム側で行う設定に変更
       const q = query(collection(db, 'users', user.uid, 'words'));
       const unsubscribeDb = onSnapshot(q, (snapshot) => {
         const wordsData = snapshot.docs.map(doc => ({
@@ -62,7 +61,6 @@ export default function App() {
           ...doc.data()
         }));
         
-        // orderの値で降順に並び替え
         wordsData.sort((a, b) => (b.order || 0) - (a.order || 0));
         setWords(wordsData);
       }, (error) => {
@@ -181,7 +179,6 @@ export default function App() {
         exampleEnglish: editForm.exampleEnglish,
         exampleJapanese: editForm.exampleJapanese,
       });
-      // 成功したら確実に編集画面を閉じる
       setEditingId(null);
     } catch (error) {
       console.error("Update Error:", error);
@@ -239,20 +236,26 @@ export default function App() {
 
   const handleSpeak = (text) => {
     if (!('speechSynthesis' in window)) return;
+    
+    // 一旦再生をキャンセル
     window.speechSynthesis.cancel();
     
     let rate = 1.0;
     if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
-      rate = 0.6;
+      rate = 0.5; // 少し極端に遅く(0.5倍)して変化をはっきりさせる
       lastSpokenRef.current.isSlow = true;
     } else {
       lastSpokenRef.current = { text, isSlow: false };
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = rate;
-    window.speechSynthesis.speak(utterance);
+    // スマホブラウザ特有の「速度変更が無視されるバグ」を回避するため、
+    // 0.1秒のタイムラグを設けてから音声を再生する
+    setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = rate;
+      window.speechSynthesis.speak(utterance);
+    }, 100);
   };
 
   // ------------------------------------------
@@ -318,7 +321,7 @@ export default function App() {
                   </div>
                 </div>
                 
-                {/* 保存・キャンセルボタン（カード最下部） */}
+                {/* 保存・キャンセルボタン */}
                 <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
                   <button onClick={() => setEditingId(null)} className="px-5 py-2.5 text-sm text-slate-600 bg-slate-100 rounded-xl font-medium hover:bg-slate-200">キャンセル</button>
                   <button onClick={() => saveEdit(word.id)} className="px-5 py-2.5 text-sm text-white bg-blue-600 rounded-xl font-medium hover:bg-blue-700 flex items-center gap-1"><Check size={18}/>保存する</button>
@@ -331,7 +334,8 @@ export default function App() {
           return (
             <div 
               key={word.id} 
-              className={`bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative transition-all duration-200 ${isDraggingThis ? 'opacity-50 scale-95 shadow-lg ring-2 ring-blue-400' : ''}`}
+              data-index={index}
+              className={`word-card bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden relative transition-all duration-200 ${isDraggingThis ? 'opacity-50 scale-95 shadow-lg ring-2 ring-blue-400' : ''}`}
               draggable={editingId === null}
               onDragStart={(e) => {
                 setDraggedItemIndex(index);
@@ -342,9 +346,30 @@ export default function App() {
               onDragEnd={handleDragEnd}
             >
               <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-                <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500">
-                  <GripVertical size={20} />
-                </div>
+                
+                {/* 【追加】スマホ用タッチイベントに対応したドラッグハンドル */}
+                {editingId !== word.id && (
+                  <div 
+                    className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500"
+                    style={{ touchAction: 'none' }} // スマホの画面スクロールを抑止
+                    onTouchStart={() => setDraggedItemIndex(index)}
+                    onTouchMove={(e) => {
+                      if (draggedItemIndex === null) return;
+                      const touch = e.touches[0];
+                      const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                      const card = target?.closest('.word-card');
+                      if (card) {
+                        const hoverIndex = Number(card.dataset.index);
+                        if (!isNaN(hoverIndex) && hoverIndex !== dragOverItemIndex) {
+                          setDragOverItemIndex(hoverIndex);
+                        }
+                      }
+                    }}
+                    onTouchEnd={handleDragEnd}
+                  >
+                    <GripVertical size={20} />
+                  </div>
+                )}
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1 pr-20">
@@ -364,7 +389,8 @@ export default function App() {
 
                 <div className="absolute right-2 top-2 flex gap-1">
                   <button onClick={() => startEditing(word)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Edit2 size={18} /></button>
-                  <button onClick={() => deleteWord(word.id)} className="p-2 text-red-400 hover:bg-red-50 rounded-full"><Trash2 size={18} /></button>
+                  {/* 削除アイコンの色を他アイコンと同じslate(グレー系統)に変更 */}
+                  <button onClick={() => deleteWord(word.id)} className="p-2 text-slate-400 hover:bg-slate-100 rounded-full"><Trash2 size={18} /></button>
                 </div>
               </div>
 
