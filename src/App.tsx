@@ -21,6 +21,9 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// ★ 直接キーを書かず、Vercelの環境変数（秘密の鍵）から読み込む
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+
 // ==========================================
 // 2. メインアプリコンポーネント
 // ==========================================
@@ -37,13 +40,12 @@ export default function App() {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({});
 
-  // ドラッグ＆ドロップ用のステート
   const [draggedItemIndex, setDraggedItemIndex] = useState(null);
   const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
-  const [touchPos, setTouchPos] = useState(null); // スマホで指を追従するカードの座標
+  const [touchPos, setTouchPos] = useState(null);
 
   const lastSpokenRef = useRef({ text: "", isSlow: false });
-  const scrollIntervalRef = useRef(null); // オートスクロール制御用
+  const scrollIntervalRef = useRef(null);
 
   // ------------------------------------------
   // 初期設定とデータ同期
@@ -66,8 +68,6 @@ export default function App() {
         
         wordsData.sort((a, b) => (b.order || 0) - (a.order || 0));
         setWords(wordsData);
-      }, (error) => {
-        console.error("Firestore Error:", error);
       });
       return () => unsubscribeDb();
     } else {
@@ -75,7 +75,6 @@ export default function App() {
     }
   }, [user]);
 
-  // 万が一コンポーネントが消えた時にスクロールを止める安全対策
   useEffect(() => {
     return () => {
       if (scrollIntervalRef.current) clearInterval(scrollIntervalRef.current);
@@ -94,53 +93,55 @@ export default function App() {
   const handleLogout = () => signOut(auth);
 
   // ------------------------------------------
-  // 翻訳＆例文取得ロジック
+  // ★ AI (Gemini) を使った翻訳＆例文生成
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
-    let exampleEn = "";
+    if (!GEMINI_API_KEY) {
+      alert("VercelにGemini APIキーが設定されていません。Settings > Environment Variables を確認してください。");
+      return { japanese: "エラー", exampleEnglish: "APIキーがありません", exampleJapanese: "" };
+    }
+
     try {
-      const dictRes = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(wordToTranslate)}`);
-      if (dictRes.ok) {
-        const dictData = await dictRes.json();
-        const meanings = dictData[0]?.meanings || [];
-        for (const meaning of meanings) {
-          const defs = meaning.definitions || [];
-          for (const def of defs) {
-            if (def.example) {
-              exampleEn = def.example;
-              break;
-            }
-          }
-          if (exampleEn) break;
-        }
+      const prompt = `
+      あなたは優秀な英語教師です。以下の英単語（または熟語）の「日本語訳」と「実用的で自然な例文」を作成してください。
+      対象: "${wordToTranslate}"
+      
+      以下のJSONフォーマットのみを厳密に出力してください。他の文章は絶対に含めないでください。
+      {
+        "japanese": "日本語訳",
+        "exampleEnglish": "対象の単語を自然に使った英語の実例文",
+        "exampleJapanese": "その例文の日本語訳"
       }
+      `;
+
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        })
+      });
+
+      if (!res.ok) throw new Error("Gemini API通信エラー");
+      const data = await res.json();
+      const text = data.candidates[0].content.parts[0].text;
+      
+      const result = JSON.parse(text);
+
+      return {
+        japanese: result.japanese,
+        exampleEnglish: result.exampleEnglish,
+        exampleJapanese: result.exampleJapanese
+      };
     } catch (err) {
-      console.warn(err);
+      console.error(err);
+      return {
+        japanese: "翻訳エラー",
+        exampleEnglish: "例文の生成に失敗しました。",
+        exampleJapanese: "AI APIの制限やエラーが発生しました。"
+      };
     }
-
-    if (!exampleEn) {
-      exampleEn = `This is a sentence using the word "${wordToTranslate}".`;
-    }
-
-    const translateText = async (text) => {
-      try {
-        const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=en|ja`);
-        if (!res.ok) return text;
-        const data = await res.json();
-        return data.responseData?.translatedText || text;
-      } catch (err) {
-        return "翻訳エラー";
-      }
-    };
-
-    const translatedWord = await translateText(wordToTranslate);
-    const translatedExample = await translateText(exampleEn);
-
-    return {
-      japanese: translatedWord,
-      exampleEnglish: exampleEn,
-      exampleJapanese: translatedExample
-    };
   };
 
   // ------------------------------------------
@@ -170,7 +171,7 @@ export default function App() {
       
     } catch (error) {
       console.error("Add Error:", error);
-      alert("追加に失敗しました。Firebaseのルール設定を確認してください。");
+      alert("追加に失敗しました。");
       setIsGenerating(false);
     }
   };
@@ -192,17 +193,16 @@ export default function App() {
       setEditingId(null);
     } catch (error) {
       console.error("Update Error:", error);
-      alert("保存に失敗しました。Firebaseのルール設定を確認してください。");
+      alert("保存に失敗しました。");
     }
   };
 
   const handleDragEnd = async () => {
-    // オートスクロールを停止
     if (scrollIntervalRef.current) {
       clearInterval(scrollIntervalRef.current);
       scrollIntervalRef.current = null;
     }
-    setTouchPos(null); // ゴーストを消す
+    setTouchPos(null);
     
     if (draggedItemIndex === null || dragOverItemIndex === null || draggedItemIndex === dragOverItemIndex) {
       setDraggedItemIndex(null);
@@ -253,7 +253,6 @@ export default function App() {
 
   const handleSpeak = (text) => {
     if (!('speechSynthesis' in window)) return;
-    
     window.speechSynthesis.cancel();
     
     let rate = 1.0;
@@ -280,7 +279,7 @@ export default function App() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-sm flex flex-col items-center max-w-sm w-full">
           <h1 className="text-2xl font-bold text-slate-800 mb-2">My単語帳</h1>
-          <p className="text-slate-500 mb-8 text-sm">クラウド保存・自動翻訳搭載</p>
+          <p className="text-slate-500 mb-8 text-sm">クラウド保存・AI自動翻訳搭載</p>
           <button onClick={handleLogin} className="w-full bg-blue-600 text-white rounded-xl py-3 font-medium hover:bg-blue-700 flex items-center justify-center gap-2">
             <LogIn size={20} /> Googleでログイン
           </button>
@@ -292,7 +291,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
       
-      {/* スマホドラッグ中のプレビュー（指に追従するゴーストカード） */}
+      {/* スマホドラッグ中のプレビュー */}
       {touchPos && draggedItemIndex !== null && words[draggedItemIndex] && (
         <div 
           className="fixed pointer-events-none z-[100] w-[calc(100%-2rem)] max-w-md bg-white rounded-2xl shadow-2xl border-2 border-blue-500 opacity-95 scale-105 p-3 flex items-center gap-3"
@@ -303,9 +302,8 @@ export default function App() {
           }}
         >
           <GripVertical size={20} className="text-blue-500" />
-          <div className="flex flex-col">
+          <div className="flex flex-col text-left">
             <span className="text-lg font-bold text-slate-800 leading-tight">{words[draggedItemIndex].english}</span>
-            <span className="text-xs text-slate-500">{words[draggedItemIndex].japanese}</span>
           </div>
         </div>
       )}
@@ -331,14 +329,12 @@ export default function App() {
           const isExpanded = expandedIds.includes(word.id);
           const isDraggingThis = draggedItemIndex === index;
           
-          // ドラッグ中の「ドロップ先」であることを示す判定
           const isHovered = dragOverItemIndex === index && draggedItemIndex !== index;
           const dragDirection = draggedItemIndex !== null && index > draggedItemIndex ? 'down' : 'up';
 
-          // ====== 編集モードのUI ======
           if (editingId === word.id) {
             return (
-              <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-4">
+              <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-4 text-left">
                 <div className="space-y-4">
                   <div className="space-y-1">
                     <label className="text-xs font-bold text-slate-400">英単語</label>
@@ -365,11 +361,8 @@ export default function App() {
             );
           }
 
-          // ====== 通常モードのUI ======
           return (
             <React.Fragment key={word.id}>
-              
-              {/* ドロップ位置の青いインジケーター（上に引かれた場合） */}
               {isHovered && dragDirection === 'up' && (
                 <div className="h-1.5 bg-blue-500 rounded-full my-1 mx-2 shadow-[0_0_8px_#3b82f6] animate-pulse"></div>
               )}
@@ -402,29 +395,24 @@ export default function App() {
                         const touch = e.touches[0];
                         setTouchPos({ x: touch.clientX, y: touch.clientY }); 
                         
-                        // ===== オートスクロール機能 =====
-                        const edgeThreshold = 80; // 画面端から80px以内でスクロール開始
-                        const scrollSpeed = 15; // スクロールの速さ
+                        const edgeThreshold = 80; 
+                        const scrollSpeed = 15; 
 
                         if (touch.clientY < edgeThreshold) {
-                          // 上端に近い場合
                           if (!scrollIntervalRef.current) {
                             scrollIntervalRef.current = setInterval(() => window.scrollBy(0, -scrollSpeed), 20);
                           }
                         } else if (window.innerHeight - touch.clientY < edgeThreshold) {
-                          // 下端に近い場合
                           if (!scrollIntervalRef.current) {
                             scrollIntervalRef.current = setInterval(() => window.scrollBy(0, scrollSpeed), 20);
                           }
                         } else {
-                          // 画面の中央付近にいる場合はスクロール停止
                           if (scrollIntervalRef.current) {
                             clearInterval(scrollIntervalRef.current);
                             scrollIntervalRef.current = null;
                           }
                         }
 
-                        // ゴーストの下にあるカードを判定してドロップ先を更新
                         const target = document.elementFromPoint(touch.clientX, touch.clientY);
                         const card = target?.closest('.word-card');
                         if (card) {
@@ -440,7 +428,7 @@ export default function App() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 text-left">
                     <div className="flex items-center gap-2 mb-1 pr-20">
                       <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
                       <button onClick={() => handleSpeak(word.english)} className="text-blue-500 p-1 bg-blue-50 rounded-full hover:bg-blue-100 flex-shrink-0"><Volume2 size={16} /></button>
@@ -469,7 +457,7 @@ export default function App() {
                   </button>
                   
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-1 space-y-3">
+                    <div className="px-4 pb-4 pt-1 space-y-3 text-left">
                       {word.exampleEnglish && (
                         <div className="flex items-start gap-2">
                           <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
@@ -484,7 +472,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* ドロップ位置の青いインジケーター（下に引かれた場合） */}
               {isHovered && dragDirection === 'down' && (
                 <div className="h-1.5 bg-blue-500 rounded-full my-1 mx-2 shadow-[0_0_8px_#3b82f6] animate-pulse"></div>
               )}
