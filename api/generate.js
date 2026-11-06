@@ -1,33 +1,39 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
 export default async function handler(req, res) {
-  // 正しいお願いのしかた（POST）以外は弾く
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'POSTメソッドのみ許可されています' });
+    return res.status(405).json({ error: 'POSTメソッドのみ' });
   }
 
   try {
-    // Vercelに設定したAPIキーを読み込む
-    const apiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    // VercelからAPIキーを取得し、念のため前後の見えない空白を除去する
+    const apiKey = (process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || "").trim();
+    
     if (!apiKey) {
-      throw new Error("APIキーが設定されていません");
+      return res.status(500).json({ error: "VercelにAPIキーが設定されていません" });
     }
 
-    // Google AIの準備
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // 外部ライブラリを一切使わず、標準機能(fetch)で直接Googleへ通信する
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: req.body.prompt }] }]
+      })
+    });
 
-    // アプリ画面から送られてきたプロンプトを受け取る
-    const prompt = req.body.prompt;
-    
-    // AIに依頼して結果をもらう
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
+    const data = await response.json();
 
-    // 結果をアプリ画面に返す
+    // Googleからエラー（権限不足や無効なキーなど）が返ってきた場合
+    if (!response.ok) {
+      console.error("Google API Error:", data);
+      return res.status(500).json({ error: "Google APIエラー" });
+    }
+
+    // 成功時、テキストだけを抜き出してアプリ画面へ返す
+    const text = data.candidates[0].content.parts[0].text;
     res.status(200).json({ text: text });
+    
   } catch (error) {
-    console.error("Gemini API Error:", error);
+    console.error("Server Error:", error);
     res.status(500).json({ error: error.message });
   }
 }
