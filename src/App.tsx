@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut, GripVertical } from 'lucide-react';
+import { Eye, EyeOff, Plus, Trash2, ChevronUp, ChevronDown, X, Volume2, Edit2, Check, LogIn, LogOut, GripVertical, RefreshCw } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from 'firebase/auth';
 import { getFirestore, collection, query, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
@@ -30,6 +30,7 @@ export default function App() {
   const [draggedItemIndex, setDraggedItemIndex] = useState(null);
   const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
   const [touchPos, setTouchPos] = useState(null);
+  const [regeneratingIds, setRegeneratingIds] = useState([]); // 新設：例文再生成中の単語IDを管理
 
   const lastSpokenRef = useRef({ text: "", isSlow: false, unlocked: false });
   const scrollIntervalRef = useRef(null);
@@ -114,6 +115,42 @@ export default function App() {
     }
   };
 
+  // ★新機能：例文のみを再生成する処理
+  const handleRegenerateExample = async (word) => {
+    if (!user) return;
+    setRegeneratingIds(prev => [...prev, word.id]); // くるくるローディング開始
+
+    const prompt = `あなたは優秀な英語教師です。以下の英単語の「新しい実用的な例文」を作成してください。
+対象: "${word.english}" (意味: ${word.japanese})
+※前回とは違う、日常会話やビジネスで使える自然な例文にしてください。
+以下のJSONフォーマットのみを厳密に出力してください。Markdownの装飾は含めないでください。
+{ "exampleEnglish": "新しい英語の実例文", "exampleJapanese": "その例文の日本語訳" }`;
+
+    try {
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      const jsonStr = data.text.replace(/```json/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(jsonStr);
+
+      if (result.exampleEnglish) {
+        await updateDoc(doc(db, 'users', user.uid, 'words', word.id), {
+          exampleEnglish: result.exampleEnglish,
+          exampleJapanese: result.exampleJapanese || ""
+        });
+      }
+    } catch (error) {
+      alert("例文の再生成に失敗しました。");
+    } finally {
+      setRegeneratingIds(prev => prev.filter(id => id !== word.id)); // ローディング終了
+    }
+  };
+
   const deleteWord = async (id) => {
     if(window.confirm("削除しますか？")) await deleteDoc(doc(db, 'users', user.uid, 'words', id));
   };
@@ -121,8 +158,9 @@ export default function App() {
   const saveEdit = async (id) => {
     try {
       await updateDoc(doc(db, 'users', user.uid, 'words', id), {
-        english: editForm.english, japanese: editForm.japanese,
-        exampleEnglish: editForm.exampleEnglish, exampleJapanese: editForm.exampleJapanese,
+        english: editForm.english, 
+        japanese: editForm.japanese
+        // 例文はここで保存しない（上書きしない）
       });
       setEditingId(null);
     } catch (error) { alert("保存失敗"); }
@@ -154,13 +192,16 @@ export default function App() {
 
   const toggleHidden = (id) => setRevealedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const toggleExample = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const startEditing = (word) => { setEditingId(word.id); setEditForm({ ...word }); };
+  
+  // 編集開始時、英単語と日本語訳だけをフォームにセットする
+  const startEditing = (word) => { 
+    setEditingId(word.id); 
+    setEditForm({ english: word.english, japanese: word.japanese }); 
+  };
 
-  // ★ スマホでの音声速度変更を確実にするための修正版
   const handleSpeak = (text) => {
     if (!('speechSynthesis' in window)) return;
 
-    // 1. iOSの厳しい制限を解除するため、初回タップ時に「無音」を同期再生する
     if (!lastSpokenRef.current.unlocked) {
       window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
     }
@@ -169,28 +210,23 @@ export default function App() {
       window.speechSynthesis.cancel();
     }
     
-    // 前回の状態（unlocked）を引き継ぐ
     const wasUnlocked = lastSpokenRef.current.unlocked || true;
     let rate = 1.0;
 
     if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
-      rate = 0.4; // スマホで確実に遅く聞こえるように 0.5 -> 0.4 に下げる
+      rate = 0.4;
       lastSpokenRef.current = { text, isSlow: true, unlocked: wasUnlocked };
     } else {
       lastSpokenRef.current = { text, isSlow: false, unlocked: wasUnlocked };
     }
 
-    // 2. iOSのバグ（連続再生時に速度変更が無視される）を回避するため、50msだけ空ける
     setTimeout(() => {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'en-US';
       utterance.rate = rate;
-      
-      // 3. iOS対策：明示的に英語の音声モデルを指定しないと速度が効かない場合がある
       const voices = window.speechSynthesis.getVoices();
       const enVoice = voices.find(v => v.lang.startsWith('en-'));
       if (enVoice) utterance.voice = enVoice;
-      
       window.speechSynthesis.speak(utterance);
     }, 50);
   };
@@ -232,15 +268,21 @@ export default function App() {
           const isDraggingThis = draggedItemIndex === index;
           const isHovered = dragOverItemIndex === index && draggedItemIndex !== index;
           const dragDirection = draggedItemIndex !== null && index > draggedItemIndex ? 'down' : 'up';
+          const isRegenerating = regeneratingIds.includes(word.id);
 
           if (editingId === word.id) {
             return (
               <div key={word.id} className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden p-4 text-left">
                 <div className="space-y-4">
-                  <div className="space-y-1"><label className="text-xs font-bold text-slate-400">英単語</label><input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-lg font-bold border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg" /></div>
-                  <div className="space-y-1"><label className="text-xs font-bold text-slate-400">日本語訳</label><textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} /></div>
-                  <div className="space-y-1"><label className="text-xs font-bold text-slate-400">例文 (英語)</label><textarea value={editForm.exampleEnglish} onChange={(e) => setEditForm({...editForm, exampleEnglish: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} /></div>
-                  <div className="space-y-1"><label className="text-xs font-bold text-slate-400">例文 (日本語訳)</label><textarea value={editForm.exampleJapanese} onChange={(e) => setEditForm({...editForm, exampleJapanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg" rows={2} /></div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">英単語</label>
+                    <input type="text" value={editForm.english} onChange={(e) => setEditForm({...editForm, english: e.target.value})} className="w-full text-lg font-bold border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg focus:outline-none" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-bold text-slate-400">日本語訳</label>
+                    <textarea value={editForm.japanese} onChange={(e) => setEditForm({...editForm, japanese: e.target.value})} className="w-full text-sm border-b-2 border-blue-400 bg-slate-50 px-3 py-2 rounded-t-lg focus:outline-none" rows={2} />
+                  </div>
+                  {/* 例文の編集エリアを削除してスッキリさせました */}
                 </div>
                 <div className="flex justify-end gap-2 pt-4 mt-4 border-t border-slate-100">
                   <button onClick={() => setEditingId(null)} className="px-5 py-2.5 text-sm text-slate-600 bg-slate-100 rounded-xl font-medium hover:bg-slate-200">キャンセル</button>
@@ -309,8 +351,17 @@ export default function App() {
                   <button onClick={() => toggleExample(word.id)} className="w-full px-4 py-3 flex items-center justify-between text-sm text-slate-600 font-medium hover:bg-slate-50">
                     <span>例文を確認する</span>{isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
+                  
                   {isExpanded && (
-                    <div className="px-4 pb-4 pt-1 space-y-3 text-left">
+                    <div className="px-4 pb-4 pt-1 space-y-3 text-left relative">
+                      
+                      {/* 生成中の視覚的フィードバック */}
+                      {isRegenerating && (
+                        <div className="absolute inset-0 bg-slate-50/50 backdrop-blur-[1px] flex items-center justify-center z-10 rounded-b-2xl">
+                          <RefreshCw size={24} className="text-blue-500 animate-spin" />
+                        </div>
+                      )}
+
                       {word.exampleEnglish && (
                         <div className="flex items-start gap-2">
                           <div className="flex-1 text-sm text-slate-700">{word.exampleEnglish}</div>
@@ -318,6 +369,19 @@ export default function App() {
                         </div>
                       )}
                       <div className={`text-sm transition-all duration-300 ${!isRevealed ? 'text-transparent select-none' : 'text-slate-700'}`} style={{ textShadow: !isRevealed ? '0 0 12px rgba(15, 23, 42, 0.4)' : 'none' }}>{word.exampleJapanese}</div>
+                      
+                      {/* ★新設：別の例文を生成するボタン */}
+                      <div className="pt-2 flex justify-end">
+                        <button 
+                          onClick={() => handleRegenerateExample(word)}
+                          disabled={isRegenerating}
+                          className="flex items-center gap-1.5 text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          <RefreshCw size={14} className={isRegenerating ? "animate-spin" : ""} />
+                          別の例文を生成
+                        </button>
+                      </div>
+
                     </div>
                   )}
                 </div>
