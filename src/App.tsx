@@ -22,7 +22,6 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [words, setWords] = useState([]);
   const [newWord, setNewWord] = useState("");
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [revealedIds, setRevealedIds] = useState([]);
   const [expandedIds, setExpandedIds] = useState([]);
@@ -59,7 +58,6 @@ export default function App() {
   };
   const handleLogout = () => signOut(auth);
 
-  // ★変更箇所：エラーの本当の理由を画面に表示する処理
   const getTranslationAndExample = async (wordToTranslate) => {
     const prompt = `あなたは優秀な英語教師です。以下の英単語（または熟語）の「日本語訳」と「実用的で自然な例文」を作成してください。
 対象: "${wordToTranslate}"
@@ -72,16 +70,10 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: prompt })
       });
-
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `通信エラー: ${res.status}`);
 
-      if (!res.ok) {
-        // バックエンドから返ってきたエラー理由を直接投げる
-        throw new Error(data.error || `通信エラー: ${res.status}`);
-      }
-
-      const responseText = data.text;
-      const jsonStr = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const jsonStr = data.text.replace(/```json/g, "").replace(/```/g, "").trim();
       const result = JSON.parse(jsonStr);
 
       return {
@@ -90,35 +82,38 @@ export default function App() {
         exampleJapanese: result.exampleJapanese || ""
       };
     } catch (e) {
-      return {
-        japanese: "エラー発生",
-        exampleEnglish: e.message, // ここに詳細エラーが表示されます
-        exampleJapanese: "上記のエラー内容を確認してください。"
-      };
+      return { japanese: "エラー発生", exampleEnglish: e.message, exampleJapanese: "通信に失敗しました" };
     }
   };
 
+  // 【改善】単語登録の待ち時間をゼロにするバックグラウンド処理
   const handleAddWord = async (e) => {
     e.preventDefault();
     const wordText = newWord.trim();
-    if (!wordText || isGenerating || !user) return;
-    setIsGenerating(true);
+    if (!wordText || !user) return;
 
+    setNewWord(""); // 入力欄を即座に空にして次の入力に備える
+
+    // 1. まず「翻訳中」としてFirestoreに即座に追加（UIがすぐ更新される）
+    const docRef = await addDoc(collection(db, 'users', user.uid, 'words'), {
+      english: wordText,
+      japanese: "翻訳中...",
+      exampleEnglish: "",
+      exampleJapanese: "",
+      order: Date.now(),
+      createdAt: serverTimestamp()
+    });
+
+    // 2. 裏側でAI通信を行い、完了次第データを上書きする
     try {
       const translationData = await getTranslationAndExample(wordText);
-      setNewWord("");
-      setIsGenerating(false);
-      await addDoc(collection(db, 'users', user.uid, 'words'), {
-        english: wordText,
+      await updateDoc(docRef, {
         japanese: translationData.japanese,
         exampleEnglish: translationData.exampleEnglish,
         exampleJapanese: translationData.exampleJapanese,
-        order: Date.now(),
-        createdAt: serverTimestamp()
       });
     } catch (error) {
-      alert("追加に失敗しました。");
-      setIsGenerating(false);
+      await updateDoc(docRef, { japanese: "翻訳失敗" });
     }
   };
 
@@ -137,6 +132,10 @@ export default function App() {
   };
 
   const handleDragEnd = async () => {
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
+    }
     setTouchPos(null);
     if (draggedItemIndex === null || dragOverItemIndex === null || draggedItemIndex === dragOverItemIndex) {
       setDraggedItemIndex(null); setDragOverItemIndex(null); return;
@@ -160,20 +159,24 @@ export default function App() {
   const toggleExample = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const startEditing = (word) => { setEditingId(word.id); setEditForm({ ...word }); };
 
+  // 【改善】スマホでも2回目に確実に遅くなるように修正
   const handleSpeak = (text) => {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
+    
     let rate = 1.0;
     if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
-      rate = 0.5; lastSpokenRef.current.isSlow = true;
+      rate = 0.5;
+      lastSpokenRef.current.isSlow = true;
     } else {
       lastSpokenRef.current = { text, isSlow: false };
     }
-    setTimeout(() => {
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'en-US'; utterance.rate = rate;
-      window.speechSynthesis.speak(utterance);
-    }, 100);
+    
+    // setTimeoutを外し、イベントから同期的（即座に）実行することでスマホの制限を回避
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-US';
+    utterance.rate = rate;
+    window.speechSynthesis.speak(utterance);
   };
 
   if (!user) {
@@ -191,6 +194,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
+      {touchPos && draggedItemIndex !== null && words[draggedItemIndex] && (
+        <div className="fixed pointer-events-none z-[100] w-[calc(100%-2rem)] max-w-md bg-white rounded-2xl shadow-2xl border-2 border-blue-500 opacity-95 scale-105 p-3 flex items-center gap-3" style={{ left: '50%', top: touchPos.y, transform: 'translate(-50%, -50%)' }}>
+          <GripVertical size={20} className="text-blue-500" />
+          <div className="flex flex-col text-left"><span className="text-lg font-bold text-slate-800 leading-tight">{words[draggedItemIndex].english}</span></div>
+        </div>
+      )}
+
       <header className="bg-white shadow-sm sticky top-0 z-10">
         <div className="max-w-md mx-auto px-4 h-14 flex items-center justify-between">
           <h1 className="text-lg font-bold text-slate-800">My単語帳</h1>
@@ -204,6 +214,8 @@ export default function App() {
           const isRevealed = revealedIds.includes(word.id);
           const isExpanded = expandedIds.includes(word.id);
           const isDraggingThis = draggedItemIndex === index;
+          const isHovered = dragOverItemIndex === index && draggedItemIndex !== index;
+          const dragDirection = draggedItemIndex !== null && index > draggedItemIndex ? 'down' : 'up';
 
           if (editingId === word.id) {
             return (
@@ -224,9 +236,45 @@ export default function App() {
 
           return (
             <React.Fragment key={word.id}>
+              {isHovered && dragDirection === 'up' && <div className="h-1.5 bg-blue-500 rounded-full my-1 mx-2 shadow-[0_0_8px_#3b82f6] animate-pulse"></div>}
+              
               <div data-index={index} className={`word-card bg-white rounded-2xl shadow-sm border overflow-hidden relative transition-all duration-200 ${isDraggingThis ? 'border-dashed border-2 border-slate-300 opacity-40 scale-95 shadow-inner' : 'border-slate-200'}`} draggable={editingId === null} onDragStart={(e) => { setDraggedItemIndex(index); e.dataTransfer.effectAllowed = "move"; }} onDragEnter={() => setDragOverItemIndex(index)} onDragOver={(e) => e.preventDefault()} onDragEnd={handleDragEnd}>
                 <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-                  {editingId !== word.id && <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500" style={{ touchAction: 'none' }} onTouchStart={(e) => { setDraggedItemIndex(index); setTouchPos({ x: e.touches[0].clientX, y: e.touches[0].clientY }); }} onTouchMove={(e) => { if (draggedItemIndex === null) return; setTouchPos({ x: e.touches[0].clientX, y: e.touches[0].clientY }); }} onTouchEnd={handleDragEnd}><GripVertical size={20} /></div>}
+                  {/* 【改善】スマホ用の正確な位置判定とスクロール機能の復元 */}
+                  {editingId !== word.id && (
+                    <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500" style={{ touchAction: 'none' }} 
+                      onTouchStart={(e) => { 
+                        setDraggedItemIndex(index); 
+                        setTouchPos({ x: e.touches[0].clientX, y: e.touches[0].clientY }); 
+                      }} 
+                      onTouchMove={(e) => { 
+                        if (draggedItemIndex === null) return; 
+                        const touch = e.touches[0];
+                        setTouchPos({ x: touch.clientX, y: touch.clientY }); 
+
+                        const edgeThreshold = 80;
+                        const scrollSpeed = 15;
+                        if (touch.clientY < edgeThreshold) {
+                          if (!scrollIntervalRef.current) scrollIntervalRef.current = setInterval(() => window.scrollBy(0, -scrollSpeed), 20);
+                        } else if (window.innerHeight - touch.clientY < edgeThreshold) {
+                          if (!scrollIntervalRef.current) scrollIntervalRef.current = setInterval(() => window.scrollBy(0, scrollSpeed), 20);
+                        } else {
+                          if (scrollIntervalRef.current) { clearInterval(scrollIntervalRef.current); scrollIntervalRef.current = null; }
+                        }
+
+                        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+                        const card = target?.closest('.word-card');
+                        if (card) {
+                          const hoverIndex = Number(card.dataset.index);
+                          if (!isNaN(hoverIndex) && hoverIndex !== dragOverItemIndex) setDragOverItemIndex(hoverIndex);
+                        }
+                      }} 
+                      onTouchEnd={handleDragEnd}
+                      onTouchCancel={handleDragEnd}
+                    >
+                      <GripVertical size={20} />
+                    </div>
+                  )}
                   <div className="flex-1 min-w-0 text-left">
                     <div className="flex items-center gap-2 mb-1 pr-20">
                       <span className="text-xl font-bold text-slate-800 truncate">{word.english}</span>
@@ -259,6 +307,8 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {isHovered && dragDirection === 'down' && <div className="h-1.5 bg-blue-500 rounded-full my-1 mx-2 shadow-[0_0_8px_#3b82f6] animate-pulse"></div>}
             </React.Fragment>
           );
         })}
@@ -272,9 +322,9 @@ export default function App() {
             <button onClick={() => setIsAddModalOpen(false)} className="absolute right-4 top-4 text-slate-400 hover:text-slate-600 p-2 bg-slate-100 rounded-full"><X size={20} /></button>
             <h2 className="text-lg font-bold text-slate-800 mb-4">単語を連続追加</h2>
             <form onSubmit={handleAddWord} className="flex gap-2">
-              <input type="text" value={newWord} onChange={(e) => setNewWord(e.target.value)} placeholder="わからない英単語を入力..." className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 focus:outline-none" disabled={isGenerating} autoFocus />
-              <button type="submit" disabled={isGenerating || !newWord.trim()} className="bg-blue-600 text-white rounded-xl px-4 py-3 font-medium hover:bg-blue-700 disabled:opacity-50">
-                {isGenerating ? <span className="block w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></span> : <Plus size={20} />}
+              <input type="text" value={newWord} onChange={(e) => setNewWord(e.target.value)} placeholder="わからない英単語を入力..." className="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-4 py-3 focus:outline-none" autoFocus />
+              <button type="submit" disabled={!newWord.trim()} className="bg-blue-600 text-white rounded-xl px-4 py-3 font-medium hover:bg-blue-700 disabled:opacity-50">
+                <Plus size={20} />
               </button>
             </form>
           </div>
