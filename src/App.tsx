@@ -224,4 +224,34 @@ export default function App() {
 
   // ------------------------------------------
   // UI補助機能
-  //
+  // ------------------------------------------
+  const toggleHidden = (id) => {
+    setRevealedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const toggleExample = (id) => {
+    setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  };
+
+  const startEditing = (word) => {
+    setEditingId(word.id);
+    setEditForm({ ...word });
+  };
+
+  const handleSpeak = (text) => {
+    if (!('speechSynthesis' in window)) return;
+    
+    window.speechSynthesis.cancel();
+    
+    let rate = 1.0;
+    if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
+      rate = 0.5; 
+      lastSpokenRef.current.isSlow = true;
+    } else {
+      lastSpokenRef.current = { text, isSlow: false };
+    }
+
+    setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utter
