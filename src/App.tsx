@@ -21,7 +21,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// ★ 直接キーを書かず、Vercelの環境変数（秘密の鍵）から読み込む
+// Vercelの環境変数からAPIキーを読み込む
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 
 // ==========================================
@@ -97,7 +97,7 @@ export default function App() {
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
     if (!GEMINI_API_KEY) {
-      alert("VercelにGemini APIキーが設定されていません。Settings > Environment Variables を確認してください。");
+      alert("VercelにGemini APIキーが設定されていません。");
       return { japanese: "エラー", exampleEnglish: "APIキーがありません", exampleJapanese: "" };
     }
 
@@ -114,7 +114,9 @@ export default function App() {
       }
       `;
 
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+      // APIキーの前後の見えない空白を自動削除し、最新の安定モデルを指定
+      const cleanKey = GEMINI_API_KEY.trim();
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${cleanKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -123,7 +125,13 @@ export default function App() {
         })
       });
 
-      if (!res.ok) throw new Error("Gemini API通信エラー");
+      // エラー時の詳細をConsoleに出力するように改善
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Gemini API Error Details:", errorText);
+        throw new Error(`Google API Error: ${res.status}`);
+      }
+
       const data = await res.json();
       const text = data.candidates[0].content.parts[0].text;
       
@@ -139,7 +147,7 @@ export default function App() {
       return {
         japanese: "翻訳エラー",
         exampleEnglish: "例文の生成に失敗しました。",
-        exampleJapanese: "AI APIの制限やエラーが発生しました。"
+        exampleJapanese: "通信エラーまたはAPIキーの設定を確認してください。"
       };
     }
   };
@@ -291,7 +299,6 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans pb-24">
       
-      {/* スマホドラッグ中のプレビュー */}
       {touchPos && draggedItemIndex !== null && words[draggedItemIndex] && (
         <div 
           className="fixed pointer-events-none z-[100] w-[calc(100%-2rem)] max-w-md bg-white rounded-2xl shadow-2xl border-2 border-blue-500 opacity-95 scale-105 p-3 flex items-center gap-3"
