@@ -43,6 +43,7 @@ export default function App() {
   const [touchPos, setTouchPos] = useState(null); // スマホで指を追従するカードの座標
 
   const lastSpokenRef = useRef({ text: "", isSlow: false });
+  const scrollIntervalRef = useRef(null); // オートスクロール制御用
 
   // ------------------------------------------
   // 初期設定とデータ同期
@@ -73,6 +74,13 @@ export default function App() {
       setWords([]);
     }
   }, [user]);
+
+  // 万が一コンポーネントが消えた時にスクロールを止める安全対策
+  useEffect(() => {
+    return () => {
+      if (scrollIntervalRef.current) clearInterval(scrollIntervalRef.current);
+    };
+  }, []);
 
   const handleLogin = async () => {
     const provider = new GoogleAuthProvider();
@@ -189,7 +197,12 @@ export default function App() {
   };
 
   const handleDragEnd = async () => {
-    setTouchPos(null); // 指を離したら追従用カードを消す
+    // オートスクロールを停止
+    if (scrollIntervalRef.current) {
+      clearInterval(scrollIntervalRef.current);
+      scrollIntervalRef.current = null;
+    }
+    setTouchPos(null); // ゴーストを消す
     
     if (draggedItemIndex === null || dragOverItemIndex === null || draggedItemIndex === dragOverItemIndex) {
       setDraggedItemIndex(null);
@@ -389,6 +402,29 @@ export default function App() {
                         const touch = e.touches[0];
                         setTouchPos({ x: touch.clientX, y: touch.clientY }); 
                         
+                        // ===== オートスクロール機能 =====
+                        const edgeThreshold = 80; // 画面端から80px以内でスクロール開始
+                        const scrollSpeed = 15; // スクロールの速さ
+
+                        if (touch.clientY < edgeThreshold) {
+                          // 上端に近い場合
+                          if (!scrollIntervalRef.current) {
+                            scrollIntervalRef.current = setInterval(() => window.scrollBy(0, -scrollSpeed), 20);
+                          }
+                        } else if (window.innerHeight - touch.clientY < edgeThreshold) {
+                          // 下端に近い場合
+                          if (!scrollIntervalRef.current) {
+                            scrollIntervalRef.current = setInterval(() => window.scrollBy(0, scrollSpeed), 20);
+                          }
+                        } else {
+                          // 画面の中央付近にいる場合はスクロール停止
+                          if (scrollIntervalRef.current) {
+                            clearInterval(scrollIntervalRef.current);
+                            scrollIntervalRef.current = null;
+                          }
+                        }
+
+                        // ゴーストの下にあるカードを判定してドロップ先を更新
                         const target = document.elementFromPoint(touch.clientX, touch.clientY);
                         const card = target?.closest('.word-card');
                         if (card) {
