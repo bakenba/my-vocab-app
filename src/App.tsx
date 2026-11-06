@@ -114,9 +114,9 @@ export default function App() {
       }
       `;
 
-      // APIキーの前後の見えない空白を自動削除し、最新の安定モデルを指定
+      // APIキーの前後の見えない空白を自動削除し、正しいモデル名(gemini-1.5-flash)を指定
       const cleanKey = GEMINI_API_KEY.trim();
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${cleanKey}`, {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -125,7 +125,6 @@ export default function App() {
         })
       });
 
-      // エラー時の詳細をConsoleに出力するように改善
       if (!res.ok) {
         const errorText = await res.text();
         console.error("Gemini API Error Details:", errorText);
