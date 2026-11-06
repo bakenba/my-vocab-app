@@ -93,7 +93,7 @@ export default function App() {
   const handleLogout = () => signOut(auth);
 
   // ------------------------------------------
-  // ★ AI (Gemini) を使った翻訳＆例文生成
+  // ★ AI (Gemini) を使った翻訳＆例文生成（自動切り替え機能付き）
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
     if (!GEMINI_API_KEY) {
@@ -101,52 +101,78 @@ export default function App() {
       return { japanese: "エラー", exampleEnglish: "APIキーがありません", exampleJapanese: "" };
     }
 
+    const prompt = `
+    あなたは優秀な英語教師です。以下の英単語（または熟語）の「日本語訳」と「実用的で自然な例文」を作成してください。
+    対象: "${wordToTranslate}"
+    
+    以下のJSONフォーマットのみを厳密に出力してください。Markdownの装飾（\`\`\`json など）は一切含めず、純粋なJSON文字列のみを返してください。
+    {
+      "japanese": "日本語訳",
+      "exampleEnglish": "対象の単語を自然に使った英語の実例文",
+      "exampleJapanese": "その例文の日本語訳"
+    }
+    `;
+
+    const cleanKey = GEMINI_API_KEY.trim();
+    
+    // 【改善】特定のモデルが見つからない(404)エラー対策
+    // Google API側で許可されているモデルを順番に試し、使えるAIを自動で探す
+    const modelsToTry = [
+      "gemini-1.5-flash",
+      "gemini-1.5-flash-8b",
+      "gemini-1.5-pro",
+      "gemini-pro"
+    ];
+    
+    let responseText = "";
+
+    for (const model of modelsToTry) {
+      try {
+        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }]
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          responseText = data.candidates[0].content.parts[0].text;
+          console.log(`[成功] モデル ${model} を使用して生成しました。`);
+          break; // 成功したらループ（AI探し）を終了
+        } else {
+          console.warn(`[自動スキップ] ${model} は利用できませんでした (Status: ${res.status})`);
+        }
+      } catch (err) {
+        console.warn(`[通信エラー] ${model}:`, err);
+      }
+    }
+
+    if (!responseText) {
+       return {
+        japanese: "翻訳エラー",
+        exampleEnglish: "全てのAIモデルで生成に失敗しました。",
+        exampleJapanese: "APIキーの権限が制限されている可能性があります。"
+      };
+    }
+
     try {
-      const prompt = `
-      あなたは優秀な英語教師です。以下の英単語（または熟語）の「日本語訳」と「実用的で自然な例文」を作成してください。
-      対象: "${wordToTranslate}"
-      
-      以下のJSONフォーマットのみを厳密に出力してください。他の文章は絶対に含めないでください。
-      {
-        "japanese": "日本語訳",
-        "exampleEnglish": "対象の単語を自然に使った英語の実例文",
-        "exampleJapanese": "その例文の日本語訳"
-      }
-      `;
-
-      // APIキーの前後の見えない空白を自動削除し、正しいモデル名(gemini-1.5-flash)を指定
-      const cleanKey = GEMINI_API_KEY.trim();
-      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        })
-      });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        console.error("Gemini API Error Details:", errorText);
-        throw new Error(`Google API Error: ${res.status}`);
-      }
-
-      const data = await res.json();
-      const text = data.candidates[0].content.parts[0].text;
-      
-      const result = JSON.parse(text);
+      // AIがMarkdown（```json ... ```）をつけて返してきた場合に、安全に除去して変換する処理
+      const jsonStr = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
+      const result = JSON.parse(jsonStr);
 
       return {
-        japanese: result.japanese,
-        exampleEnglish: result.exampleEnglish,
-        exampleJapanese: result.exampleJapanese
+        japanese: result.japanese || "翻訳エラー",
+        exampleEnglish: result.exampleEnglish || "例文が生成されませんでした",
+        exampleJapanese: result.exampleJapanese || ""
       };
-    } catch (err) {
-      console.error(err);
+    } catch (e) {
+      console.error("JSON Parse Error:", e, responseText);
       return {
         japanese: "翻訳エラー",
-        exampleEnglish: "例文の生成に失敗しました。",
-        exampleJapanese: "通信エラーまたはAPIキーの設定を確認してください。"
+        exampleEnglish: "AIの出力形式が不正でした。",
+        exampleJapanese: responseText
       };
     }
   };
