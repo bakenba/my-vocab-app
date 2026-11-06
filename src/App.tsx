@@ -31,7 +31,7 @@ export default function App() {
   const [dragOverItemIndex, setDragOverItemIndex] = useState(null);
   const [touchPos, setTouchPos] = useState(null);
 
-  const lastSpokenRef = useRef({ text: "", isSlow: false });
+  const lastSpokenRef = useRef({ text: "", isSlow: false, unlocked: false });
   const scrollIntervalRef = useRef(null);
 
   useEffect(() => {
@@ -86,15 +86,13 @@ export default function App() {
     }
   };
 
-  // 【改善】単語登録の待ち時間をゼロにするバックグラウンド処理
   const handleAddWord = async (e) => {
     e.preventDefault();
     const wordText = newWord.trim();
     if (!wordText || !user) return;
 
-    setNewWord(""); // 入力欄を即座に空にして次の入力に備える
+    setNewWord("");
 
-    // 1. まず「翻訳中」としてFirestoreに即座に追加（UIがすぐ更新される）
     const docRef = await addDoc(collection(db, 'users', user.uid, 'words'), {
       english: wordText,
       japanese: "翻訳中...",
@@ -104,7 +102,6 @@ export default function App() {
       createdAt: serverTimestamp()
     });
 
-    // 2. 裏側でAI通信を行い、完了次第データを上書きする
     try {
       const translationData = await getTranslationAndExample(wordText);
       await updateDoc(docRef, {
@@ -159,24 +156,43 @@ export default function App() {
   const toggleExample = (id) => setExpandedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   const startEditing = (word) => { setEditingId(word.id); setEditForm({ ...word }); };
 
-  // 【改善】スマホでも2回目に確実に遅くなるように修正
+  // ★ スマホでの音声速度変更を確実にするための修正版
   const handleSpeak = (text) => {
     if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    
-    let rate = 1.0;
-    if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
-      rate = 0.5;
-      lastSpokenRef.current.isSlow = true;
-    } else {
-      lastSpokenRef.current = { text, isSlow: false };
+
+    // 1. iOSの厳しい制限を解除するため、初回タップ時に「無音」を同期再生する
+    if (!lastSpokenRef.current.unlocked) {
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(''));
+    }
+
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
     }
     
-    // setTimeoutを外し、イベントから同期的（即座に）実行することでスマホの制限を回避
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    utterance.rate = rate;
-    window.speechSynthesis.speak(utterance);
+    // 前回の状態（unlocked）を引き継ぐ
+    const wasUnlocked = lastSpokenRef.current.unlocked || true;
+    let rate = 1.0;
+
+    if (lastSpokenRef.current.text === text && !lastSpokenRef.current.isSlow) {
+      rate = 0.4; // スマホで確実に遅く聞こえるように 0.5 -> 0.4 に下げる
+      lastSpokenRef.current = { text, isSlow: true, unlocked: wasUnlocked };
+    } else {
+      lastSpokenRef.current = { text, isSlow: false, unlocked: wasUnlocked };
+    }
+
+    // 2. iOSのバグ（連続再生時に速度変更が無視される）を回避するため、50msだけ空ける
+    setTimeout(() => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'en-US';
+      utterance.rate = rate;
+      
+      // 3. iOS対策：明示的に英語の音声モデルを指定しないと速度が効かない場合がある
+      const voices = window.speechSynthesis.getVoices();
+      const enVoice = voices.find(v => v.lang.startsWith('en-'));
+      if (enVoice) utterance.voice = enVoice;
+      
+      window.speechSynthesis.speak(utterance);
+    }, 50);
   };
 
   if (!user) {
@@ -240,7 +256,6 @@ export default function App() {
               
               <div data-index={index} className={`word-card bg-white rounded-2xl shadow-sm border overflow-hidden relative transition-all duration-200 ${isDraggingThis ? 'border-dashed border-2 border-slate-300 opacity-40 scale-95 shadow-inner' : 'border-slate-200'}`} draggable={editingId === null} onDragStart={(e) => { setDraggedItemIndex(index); e.dataTransfer.effectAllowed = "move"; }} onDragEnter={() => setDragOverItemIndex(index)} onDragOver={(e) => e.preventDefault()} onDragEnd={handleDragEnd}>
                 <div className="p-4 border-b border-slate-100 flex items-start gap-3">
-                  {/* 【改善】スマホ用の正確な位置判定とスクロール機能の復元 */}
                   {editingId !== word.id && (
                     <div className="flex flex-col items-center justify-center mt-1 cursor-grab active:cursor-grabbing text-slate-300 hover:text-slate-500" style={{ touchAction: 'none' }} 
                       onTouchStart={(e) => { 
