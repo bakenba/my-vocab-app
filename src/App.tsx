@@ -21,9 +21,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Vercelの環境変数からAPIキーを読み込む
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-
 // ==========================================
 // 2. メインアプリコンポーネント
 // ==========================================
@@ -93,14 +90,9 @@ export default function App() {
   const handleLogout = () => signOut(auth);
 
   // ------------------------------------------
-  // ★ AI (Gemini) を使った翻訳＆例文生成（自動切り替え機能付き）
+  // ★ Vercelの裏方APIを使った翻訳＆例文生成（書き換え完了）
   // ------------------------------------------
   const getTranslationAndExample = async (wordToTranslate) => {
-    if (!GEMINI_API_KEY) {
-      alert("VercelにGemini APIキーが設定されていません。");
-      return { japanese: "エラー", exampleEnglish: "APIキーがありません", exampleJapanese: "" };
-    }
-
     const prompt = `
     あなたは優秀な英語教師です。以下の英単語（または熟語）の「日本語訳」と「実用的で自然な例文」を作成してください。
     対象: "${wordToTranslate}"
@@ -113,51 +105,22 @@ export default function App() {
     }
     `;
 
-    const cleanKey = GEMINI_API_KEY.trim();
-    
-    // 【改善】特定のモデルが見つからない(404)エラー対策
-    // Google API側で許可されているモデルを順番に試し、使えるAIを自動で探す
-    const modelsToTry = [
-      "gemini-1.5-flash",
-      "gemini-1.5-flash-8b",
-      "gemini-1.5-pro",
-      "gemini-pro"
-    ];
-    
-    let responseText = "";
-
-    for (const model of modelsToTry) {
-      try {
-        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${cleanKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }]
-          })
-        });
-
-        if (res.ok) {
-          const data = await res.json();
-          responseText = data.candidates[0].content.parts[0].text;
-          console.log(`[成功] モデル ${model} を使用して生成しました。`);
-          break; // 成功したらループ（AI探し）を終了
-        } else {
-          console.warn(`[自動スキップ] ${model} は利用できませんでした (Status: ${res.status})`);
-        }
-      } catch (err) {
-        console.warn(`[通信エラー] ${model}:`, err);
-      }
-    }
-
-    if (!responseText) {
-       return {
-        japanese: "翻訳エラー",
-        exampleEnglish: "全てのAIモデルで生成に失敗しました。",
-        exampleJapanese: "APIキーの権限が制限されている可能性があります。"
-      };
-    }
-
     try {
+      // フロントエンドから直接AIを呼ぶのをやめ、自作したVercelの裏方窓口(/api/generate)にお願いする
+      const res = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt })
+      });
+
+      if (!res.ok) {
+        throw new Error(`API通信エラー: ${res.status}`);
+      }
+
+      // 裏方からAIの結果を受け取る
+      const data = await res.json();
+      const responseText = data.text;
+
       // AIがMarkdown（```json ... ```）をつけて返してきた場合に、安全に除去して変換する処理
       const jsonStr = responseText.replace(/```json/g, "").replace(/```/g, "").trim();
       const result = JSON.parse(jsonStr);
@@ -168,11 +131,11 @@ export default function App() {
         exampleJapanese: result.exampleJapanese || ""
       };
     } catch (e) {
-      console.error("JSON Parse Error:", e, responseText);
+      console.error("Translation Error:", e);
       return {
         japanese: "翻訳エラー",
-        exampleEnglish: "AIの出力形式が不正でした。",
-        exampleJapanese: responseText
+        exampleEnglish: "サーバーとの通信、またはAIの出力形式が不正でした。",
+        exampleJapanese: "裏方の通信に失敗しました。"
       };
     }
   };
