@@ -11,13 +11,11 @@ export default async function handler(req, res) {
 
     const prompt = req.body.prompt;
     
-    // あなたのオリジナルコードにあった「使えるAIを順番に探す」優れた機能を復活
+    // 2026年現在アクティブな最新モデル名に更新
     const modelsToTry = [
-      "gemini-1.5-flash",
-      "gemini-1.5-flash-8b",
-      "gemini-1.5-pro",
-      "gemini-pro",
-      "gemini-1.0-pro"
+      "gemini-3.8-flash",
+      "gemini-3.6-flash",
+      "gemini-3.5-flash-lite"
     ];
 
     let lastErrorMsg = "利用可能なモデルが見つかりませんでした";
@@ -34,14 +32,14 @@ export default async function handler(req, res) {
 
         const data = await response.json();
 
-        // 成功した場合は、即座に結果を返してループを終了
+        // 成功した場合は、即座に結果を返して終了
         if (response.ok) {
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
           if (text) {
             return res.status(200).json({ text: text });
           }
         } else {
-          // 404などのエラーが出た場合は理由を記録し、止まらずに次のAIモデルを試す
+          // エラー理由を記録し、止まらずに次のAIモデルを試す
           lastErrorMsg = data.error?.message || response.statusText;
           console.log(`[スキップ] ${model}: ${lastErrorMsg}`);
         }
@@ -50,7 +48,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // 用意した全てのAIモデルが使えなかった場合のみエラーを返す
     return res.status(404).json({ error: `全てのAIモデルが利用不可でした。最終エラー: ${lastErrorMsg}` });
 
   } catch (error) {
